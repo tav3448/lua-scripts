@@ -1,40 +1,61 @@
 local kavoui = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-Ui-Library/main/source.lua"))()
 local window = kavoui.CreateLib("Arena ESP", "DarkTheme")
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local camera = workspace.CurrentCamera
-
 local esp_settings = {
     enabled = true,
     skel = true,
     skel_col = Color3.new(1, 1, 1),
     nameesp = true,
-    thickness = 1.5
+    thickness = 1.5,
+    hitbox_enabled = true,
+    hitbox_size = 10,
+    hitbox_transparency = 0.5
 }
-
 local esp_cache = {}
-
 local espTab = window:NewTab("Skeleton ESP")
 local espSection = espTab:NewSection("ESP Settings")
-
 espSection:NewToggle("Enable ESP", "Toggles the ESP on and off", function(state)
     esp_settings.enabled = state
 end)
-
 espSection:NewToggle("Enable Skeleton", "Toggles skeleton ESP", function(state)
     esp_settings.skel = state
 end)
-
 espSection:NewToggle("Enable Name ESP", "Toggles name or distance ESP", function(state)
     esp_settings.nameesp = state
 end)
-
 espSection:NewColorPicker("ESP Color", "Choose the ESP color", esp_settings.skel_col, function(color)
     esp_settings.skel_col = color
     for _, data in pairs(esp_cache) do
         for _, obj in pairs(data.drawings) do
             if obj.Color then obj.Color = color end
+        end
+    end
+end)
+
+local hitboxSection = espTab:NewSection("Head Hitbox Extender")
+hitboxSection:NewToggle("Enable Head Hitbox", "Extends head hitbox for easier targeting", function(state)
+    esp_settings.hitbox_enabled = state
+    for _, data in pairs(esp_cache) do
+        if data.hitbox then
+            data.hitbox.Transparency = state and esp_settings.hitbox_transparency or 1
+        end
+    end
+end)
+hitboxSection:NewSlider("Hitbox Size", "Adjust head hitbox size", 20, 1, function(value)
+    esp_settings.hitbox_size = value
+    for _, data in pairs(esp_cache) do
+        if data.hitbox then
+            data.hitbox.Size = Vector3.new(value, value, value)
+        end
+    end
+end)
+hitboxSection:NewSlider("Hitbox Transparency", "Adjust head hitbox transparency", 1, 0, function(value)
+    esp_settings.hitbox_transparency = value
+    for _, data in pairs(esp_cache) do
+        if data.hitbox and esp_settings.hitbox_enabled then
+            data.hitbox.Transparency = value
         end
     end
 end)
@@ -47,15 +68,16 @@ local function getPartPosition(part)
     end
     return nil, false
 end
-
 -- ESP drawer for one character
 local function drawESP(player, character)
     if esp_cache[character] then
         esp_cache[character].connection:Disconnect()
         for _, obj in pairs(esp_cache[character].drawings) do obj.Visible = false; obj:Remove() end
+        if esp_cache[character].hitbox then
+            esp_cache[character].hitbox:Destroy()
+        end
         esp_cache[character] = nil
     end
-
     local drawings = {
         nameText = Drawing.new("Text")
     }
@@ -75,7 +97,28 @@ local function drawESP(player, character)
     text.Font = 2
     text.Visible = false
     text.Color = esp_settings.skel_col
-
+    
+    -- Create head hitbox
+    local head = character:FindFirstChild("Head")
+    local hitbox = nil
+    if head then
+        hitbox = Instance.new("Part")
+        hitbox.Size = Vector3.new(esp_settings.hitbox_size, esp_settings.hitbox_size, esp_settings.hitbox_size)
+        hitbox.Transparency = esp_settings.hitbox_enabled and esp_settings.hitbox_transparency or 1
+        hitbox.CanCollide = false
+        hitbox.Anchored = false
+        hitbox.Material = Enum.Material.ForceField
+        hitbox.Color = Color3.new(1, 0, 0)
+        hitbox.Name = "HeadHitbox"
+        hitbox.Parent = character
+        
+        local weld = Instance.new("Weld")
+        weld.Part0 = head
+        weld.Part1 = hitbox
+        weld.C0 = CFrame.new(0, 0, 0)
+        weld.Parent = hitbox
+    end
+    
     local function update()
         if not esp_settings.enabled or not character.Parent then
             for _, obj in pairs(drawings) do obj.Visible = false end
@@ -84,7 +127,6 @@ local function drawESP(player, character)
         local humanoid = character:FindFirstChildWhichIsA("Humanoid")
         local rootPart = character:FindFirstChild("HumanoidRootPart")
         local head = character:FindFirstChild("Head")
-
         if humanoid and humanoid.Health > 0 and rootPart and head then
             local rootPos, onScreen = getPartPosition(rootPart)
             local headPos, headVisible = getPartPosition(head)
@@ -116,14 +158,12 @@ local function drawESP(player, character)
                             drawings.upperTorso.From = torsoPos + Vector2.new(0, -2)
                             drawings.upperTorso.To   = torsoPos + Vector2.new(0, 2)
                             drawings.upperTorso.Visible = true
-
                             -- Arms
                             for limbName, limbPart in pairs({leftArm = limbs.leftArm, rightArm = limbs.rightArm}) do
                                 local lPos, lScreen = getPartPosition(limbPart)
                                 drawings[limbName == "leftArm" and "leftUpperArm" or "rightUpperArm"].From = torsoPos
                                 drawings[limbName == "leftArm" and "leftUpperArm" or "rightUpperArm"].To = lPos
                                 drawings[limbName == "leftArm" and "leftUpperArm" or "rightUpperArm"].Visible = lScreen
-
                                 -- Legs
                                 for legName, legPart in pairs({leftLeg = limbs.leftLeg, rightLeg = limbs.rightLeg}) do
                                     local legPos, legScreen = getPartPosition(legPart)
@@ -147,7 +187,6 @@ local function drawESP(player, character)
                             leftUpperLeg = gpc("LeftUpperLeg"), leftLowerLeg = gpc("LeftLowerLeg"), leftFoot = gpc("LeftFoot"),
                             rightUpperLeg = gpc("RightUpperLeg"), rightLowerLeg = gpc("RightLowerLeg"), rightFoot = gpc("RightFoot")
                         }
-
                         local upTorsoPos, upTorsoScreen = getPartPosition(parts.upperTorso)
                         local loTorsoPos, loTorsoScreen = getPartPosition(parts.lowerTorso)
                         if upTorsoScreen and loTorsoScreen then
@@ -155,7 +194,6 @@ local function drawESP(player, character)
                             drawings.upperTorso.To = loTorsoPos
                             drawings.upperTorso.Visible = true
                         end
-
                         -- Arms and legs logic similar as above (add checks for existence)
                         local armParts = {"leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand"}
                         for i = 1, 3 do
@@ -187,11 +225,9 @@ local function drawESP(player, character)
             for _, obj in pairs(drawings) do obj.Visible = false end
         end
     end
-
     -- Heartbeat connection
     local conn = RunService.Heartbeat:Connect(update)
-    esp_cache[character] = {drawings = drawings, connection = conn}
-
+    esp_cache[character] = {drawings = drawings, connection = conn, hitbox = hitbox}
     -- Character removal cleanup
     character.AncestryChanged:Connect(function(_, parent)
         if not parent then
@@ -199,11 +235,13 @@ local function drawESP(player, character)
             if esp_cache[character] and esp_cache[character].connection then
                 esp_cache[character].connection:Disconnect()
             end
+            if esp_cache[character] and esp_cache[character].hitbox then
+                esp_cache[character].hitbox:Destroy()
+            end
             esp_cache[character] = nil
         end
     end)
 end
-
 -- ESP for all present players
 local function attachESP(player)
     player.CharacterAdded:Connect(function(char)
@@ -212,13 +250,11 @@ local function attachESP(player)
     end)
     if player.Character then drawESP(player, player.Character) end
 end
-
 for _, player in pairs(Players:GetPlayers()) do
     if player ~= Players.LocalPlayer then
         attachESP(player)
     end
 end
-
 Players.PlayerAdded:Connect(function(player)
     if player ~= Players.LocalPlayer then
         attachESP(player)
