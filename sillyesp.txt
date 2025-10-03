@@ -4,12 +4,12 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local camera = workspace.CurrentCamera
 local esp_settings = {
-    enabled = true,
-    skel = true,
+    enabled = false,
+    skel = false,
     skel_col = Color3.new(1, 1, 1),
-    nameesp = true,
+    nameesp = false,
     thickness = 1.5,
-    hitbox_enabled = true,
+    hitbox_enabled = false,
     hitbox_size = 10,
     hitbox_transparency = 0.5
 }
@@ -260,3 +260,4 @@ Players.PlayerAdded:Connect(function(player)
         attachESP(player)
     end
 end)
+
