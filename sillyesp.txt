@@ -1,0 +1,226 @@
+local kavoui = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-Ui-Library/main/source.lua"))()
+local window = kavoui.CreateLib("Arena ESP", "DarkTheme")
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local camera = workspace.CurrentCamera
+
+local esp_settings = {
+    enabled = true,
+    skel = true,
+    skel_col = Color3.new(1, 1, 1),
+    nameesp = true,
+    thickness = 1.5
+}
+
+local esp_cache = {}
+
+local espTab = window:NewTab("Skeleton ESP")
+local espSection = espTab:NewSection("ESP Settings")
+
+espSection:NewToggle("Enable ESP", "Toggles the ESP on and off", function(state)
+    esp_settings.enabled = state
+end)
+
+espSection:NewToggle("Enable Skeleton", "Toggles skeleton ESP", function(state)
+    esp_settings.skel = state
+end)
+
+espSection:NewToggle("Enable Name ESP", "Toggles name or distance ESP", function(state)
+    esp_settings.nameesp = state
+end)
+
+espSection:NewColorPicker("ESP Color", "Choose the ESP color", esp_settings.skel_col, function(color)
+    esp_settings.skel_col = color
+    for _, data in pairs(esp_cache) do
+        for _, obj in pairs(data.drawings) do
+            if obj.Color then obj.Color = color end
+        end
+    end
+end)
+
+-- Utility for safe part positions
+local function getPartPosition(part)
+    if part and part:IsA("BasePart") then
+        local pos, onscreen = camera:WorldToViewportPoint(part.Position)
+        return Vector2.new(pos.X, pos.Y), onscreen
+    end
+    return nil, false
+end
+
+-- ESP drawer for one character
+local function drawESP(player, character)
+    if esp_cache[character] then
+        esp_cache[character].connection:Disconnect()
+        for _, obj in pairs(esp_cache[character].drawings) do obj.Visible = false; obj:Remove() end
+        esp_cache[character] = nil
+    end
+
+    local drawings = {
+        nameText = Drawing.new("Text")
+    }
+    for _, name in ipairs({
+        "head", "upperTorso", "leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm",
+        "leftUpperLeg", "leftLowerLeg", "leftFoot", "rightUpperLeg", "rightLowerLeg", "rightFoot"
+    }) do
+        drawings[name] = Drawing.new("Line")
+        drawings[name].Thickness = esp_settings.thickness
+        drawings[name].Visible = false
+        drawings[name].Color = esp_settings.skel_col
+    end
+    local text = drawings.nameText
+    text.Size = 16
+    text.Center = true
+    text.Outline = true
+    text.Font = 2
+    text.Visible = false
+    text.Color = esp_settings.skel_col
+
+    local function update()
+        if not esp_settings.enabled or not character.Parent then
+            for _, obj in pairs(drawings) do obj.Visible = false end
+            return
+        end
+        local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        local head = character:FindFirstChild("Head")
+
+        if humanoid and humanoid.Health > 0 and rootPart and head then
+            local rootPos, onScreen = getPartPosition(rootPart)
+            local headPos, headVisible = getPartPosition(head)
+            if onScreen and headVisible then
+                -- Name and distance ESP
+                if esp_settings.nameesp then
+                    local distance = math.floor((camera.CFrame.Position - head.Position).Magnitude)
+                    text.Text = string.format("%s [%dm]", player.Name, distance)
+                    text.Position = Vector2.new(headPos.X, headPos.Y - 20)
+                    text.Color = esp_settings.skel_col
+                    text.Visible = true
+                else
+                    text.Visible = false
+                end
+                -- Skeleton drawing
+                if esp_settings.skel then
+                    -- R6 parts
+                    if humanoid.RigType == Enum.HumanoidRigType.R6 then
+                        local torso = character:FindFirstChild("Torso")
+                        local limbs = {
+                            leftArm = character:FindFirstChild("Left Arm"),
+                            rightArm = character:FindFirstChild("Right Arm"),
+                            leftLeg = character:FindFirstChild("Left Leg"),
+                            rightLeg = character:FindFirstChild("Right Leg"),
+                        }
+                        local torsoPos, torsoScreen = getPartPosition(torso)
+                        -- Draw skeleton lines
+                        if torsoScreen then
+                            drawings.upperTorso.From = torsoPos + Vector2.new(0, -2)
+                            drawings.upperTorso.To   = torsoPos + Vector2.new(0, 2)
+                            drawings.upperTorso.Visible = true
+
+                            -- Arms
+                            for limbName, limbPart in pairs({leftArm = limbs.leftArm, rightArm = limbs.rightArm}) do
+                                local lPos, lScreen = getPartPosition(limbPart)
+                                drawings[limbName == "leftArm" and "leftUpperArm" or "rightUpperArm"].From = torsoPos
+                                drawings[limbName == "leftArm" and "leftUpperArm" or "rightUpperArm"].To = lPos
+                                drawings[limbName == "leftArm" and "leftUpperArm" or "rightUpperArm"].Visible = lScreen
+
+                                -- Legs
+                                for legName, legPart in pairs({leftLeg = limbs.leftLeg, rightLeg = limbs.rightLeg}) do
+                                    local legPos, legScreen = getPartPosition(legPart)
+                                    drawings[legName == "leftLeg" and "leftUpperLeg" or "rightUpperLeg"].From = torsoPos + Vector2.new(0, 2)
+                                    drawings[legName == "leftLeg" and "leftUpperLeg" or "rightUpperLeg"].To = legPos
+                                    drawings[legName == "leftLeg" and "leftUpperLeg" or "rightUpperLeg"].Visible = legScreen
+                                end
+                            end
+                        end
+                        -- Head Line
+                        drawings.head.From = headPos
+                        drawings.head.To = torsoPos
+                        drawings.head.Visible = torsoScreen and headVisible
+                    else
+                        -- R15 parts
+                        local function gpc(name) return character:FindFirstChild(name) end
+                        local parts = {
+                            upperTorso = gpc("UpperTorso"), lowerTorso = gpc("LowerTorso"),
+                            leftUpperArm = gpc("LeftUpperArm"), leftLowerArm = gpc("LeftLowerArm"), leftHand = gpc("LeftHand"),
+                            rightUpperArm = gpc("RightUpperArm"), rightLowerArm = gpc("RightLowerArm"), rightHand = gpc("RightHand"),
+                            leftUpperLeg = gpc("LeftUpperLeg"), leftLowerLeg = gpc("LeftLowerLeg"), leftFoot = gpc("LeftFoot"),
+                            rightUpperLeg = gpc("RightUpperLeg"), rightLowerLeg = gpc("RightLowerLeg"), rightFoot = gpc("RightFoot")
+                        }
+
+                        local upTorsoPos, upTorsoScreen = getPartPosition(parts.upperTorso)
+                        local loTorsoPos, loTorsoScreen = getPartPosition(parts.lowerTorso)
+                        if upTorsoScreen and loTorsoScreen then
+                            drawings.upperTorso.From = upTorsoPos
+                            drawings.upperTorso.To = loTorsoPos
+                            drawings.upperTorso.Visible = true
+                        end
+
+                        -- Arms and legs logic similar as above (add checks for existence)
+                        local armParts = {"leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand"}
+                        for i = 1, 3 do
+                            local aName = armParts[i]
+                            local bName = armParts[i+3]
+                            local aPos, aScreen = getPartPosition(parts[aName])
+                            local bPos, bScreen = getPartPosition(parts[bName])
+                            if aScreen and bScreen then
+                                local leftUpper = getPartPosition(parts.leftUpperArm)
+                                drawings.leftUpperArm.From = upTorsoPos
+                                drawings.leftUpperArm.To = leftUpper
+                                drawings.leftUpperArm.Visible = true
+                                -- and so on for other joints (repeat this block for all limb parts accordingly)
+                            end
+                        end
+                        -- Head Line
+                        drawings.head.From = headPos
+                        drawings.head.To = upTorsoPos
+                        drawings.head.Visible = upTorsoScreen and headVisible
+                    end
+                end
+            end
+            -- Always update color/thickness
+            for _, obj in pairs(drawings) do
+                obj.Color = esp_settings.skel_col
+                if obj.Thickness then obj.Thickness = esp_settings.thickness end
+            end
+        else
+            for _, obj in pairs(drawings) do obj.Visible = false end
+        end
+    end
+
+    -- Heartbeat connection
+    local conn = RunService.Heartbeat:Connect(update)
+    esp_cache[character] = {drawings = drawings, connection = conn}
+
+    -- Character removal cleanup
+    character.AncestryChanged:Connect(function(_, parent)
+        if not parent then
+            for _, obj in pairs(drawings) do obj.Visible = false; obj:Remove() end
+            if esp_cache[character] and esp_cache[character].connection then
+                esp_cache[character].connection:Disconnect()
+            end
+            esp_cache[character] = nil
+        end
+    end)
+end
+
+-- ESP for all present players
+local function attachESP(player)
+    player.CharacterAdded:Connect(function(char)
+        wait(1)
+        drawESP(player, char)
+    end)
+    if player.Character then drawESP(player, player.Character) end
+end
+
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= Players.LocalPlayer then
+        attachESP(player)
+    end
+end
+
+Players.PlayerAdded:Connect(function(player)
+    if player ~= Players.LocalPlayer then
+        attachESP(player)
+    end
+end)
