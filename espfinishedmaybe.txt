@@ -1,0 +1,325 @@
+local kavoui = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-Ui-Library/main/source.lua"))()
+local window = kavoui.CreateLib("Arena ESP", "DarkTheme")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local camera = workspace.CurrentCamera
+local input = game:GetService("UserInputService") -- Make sure input is defined
+
+local esp_settings = {
+    enabled = false,
+    skel = false,
+    skel_col = Color3.new(1, 1, 1),
+    nameesp = false,
+    thickness = 1.5,
+    hitbox_enabled = false,
+    hitbox_size = 10,
+    hitbox_transparency = 0.5
+}
+local esp_cache = {}
+
+-- === SOFT AIM SETTINGS ===
+local aimbot_settings = {
+    enabled = false,
+    fov = 100
+}
+
+local espTab = window:NewTab("Skeleton ESP")
+local espSection = espTab:NewSection("ESP Settings")
+
+espSection:NewToggle("Enable ESP", "Toggles the ESP on and off", function(state)
+    esp_settings.enabled = state
+end)
+espSection:NewToggle("Enable Skeleton", "Toggles skeleton ESP", function(state)
+    esp_settings.skel = state
+end)
+espSection:NewToggle("Enable Name ESP", "Toggles name or distance ESP", function(state)
+    esp_settings.nameesp = state
+end)
+espSection:NewColorPicker("ESP Color", "Choose the ESP color", esp_settings.skel_col, function(color)
+    esp_settings.skel_col = color
+    for _, data in pairs(esp_cache) do
+        for _, obj in pairs(data.drawings) do
+            if obj.Color then obj.Color = color end
+        end
+    end
+end)
+
+local hitboxSection = espTab:NewSection("Head Hitbox Extender")
+hitboxSection:NewToggle("Enable Head Hitbox", "Extends head hitbox for easier targeting", function(state)
+    esp_settings.hitbox_enabled = state
+    for _, data in pairs(esp_cache) do
+        if data.hitbox then
+            data.hitbox.Transparency = state and esp_settings.hitbox_transparency or 1
+        end
+    end
+end)
+hitboxSection:NewSlider("Hitbox Size", "Adjust head hitbox size", 20, 1, function(value)
+    esp_settings.hitbox_size = value
+    for _, data in pairs(esp_cache) do
+        if data.hitbox then
+            data.hitbox.Size = Vector3.new(value, value, value)
+        end
+    end
+end)
+hitboxSection:NewSlider("Hitbox Transparency", "Adjust head hitbox transparency", 1, 0, function(value)
+    esp_settings.hitbox_transparency = value
+    for _, data in pairs(esp_cache) do
+        if data.hitbox and esp_settings.hitbox_enabled then
+            data.hitbox.Transparency = value
+        end
+    end
+end)
+
+-- === SOFT AIM UI SECTION ===
+local aimbotSection = espTab:NewSection("Soft Aim-Assist")
+aimbotSection:NewToggle("Enable Soft Aim", "Toggle soft aim/instant-hit helper on or off", function(state)
+    aimbot_settings.enabled = state
+end)
+aimbotSection:NewSlider("Soft Aim FOV", "Change soft aim search radius", 500, 10, function(val)
+    aimbot_settings.fov = val
+end)
+
+-- Utility for safe part positions
+local function getPartPosition(part)
+    if part and part:IsA("BasePart") then
+        local pos, onscreen = camera:WorldToViewportPoint(part.Position)
+        return Vector2.new(pos.X, pos.Y), onscreen
+    end
+    return nil, false
+end
+
+-- SOFT AIM: Find closest enemy head within FOV
+local function getClosestEnemyInFOV()
+    local closest, closestDist = nil, aimbot_settings.fov
+    local mousePos = Vector2.new(input:GetMouseLocation().X, input:GetMouseLocation().Y)
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            local head = player.Character:FindFirstChild("Head")
+            local humanoid = player.Character:FindFirstChildWhichIsA("Humanoid")
+            if head and humanoid and humanoid.Health > 0 then
+                local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local dist = (mousePos - Vector2.new(screenPos.X, screenPos.Y)).Magnitude
+                    if dist < closestDist then
+                        closestDist = dist
+                        closest = {player = player, head = head}
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- Proper ESP removal helper
+local function removeESP(character)
+    local cache = esp_cache[character]
+    if cache then
+        cache.connection:Disconnect()
+        for _, obj in pairs(cache.drawings) do 
+            obj.Visible = false 
+            pcall(function() obj:Remove() end)
+        end
+        if cache.hitbox then
+            cache.hitbox:Destroy()
+        end
+        esp_cache[character] = nil
+    end
+end
+
+-- ESP drawer for one character (full limb lines)
+local function drawESP(player, character)
+    removeESP(character)
+    local drawings = {
+        nameText = Drawing.new("Text"),
+        head = Drawing.new("Line"),
+        upperTorso = Drawing.new("Line"),
+        lowerTorso = Drawing.new("Line"),
+        
+        leftUpperArm = Drawing.new("Line"),
+        leftLowerArm = Drawing.new("Line"),
+        leftHand = Drawing.new("Line"),
+        rightUpperArm = Drawing.new("Line"),
+        rightLowerArm = Drawing.new("Line"),
+        rightHand = Drawing.new("Line"),
+        
+        leftUpperLeg = Drawing.new("Line"),
+        leftLowerLeg = Drawing.new("Line"),
+        leftFoot = Drawing.new("Line"),
+        rightUpperLeg = Drawing.new("Line"),
+        rightLowerLeg = Drawing.new("Line"),
+        rightFoot = Drawing.new("Line"),
+    }
+
+    for _, obj in pairs(drawings) do
+        if typeof(obj) == "Instance" then continue end
+        obj.Thickness = esp_settings.thickness
+        obj.Visible = false
+        obj.Color = esp_settings.skel_col
+    end
+    local text = drawings.nameText
+    text.Size = 16
+    text.Center = true
+    text.Outline = true
+    text.Font = 2
+    text.Visible = false
+    text.Color = esp_settings.skel_col
+
+    -- Create head hitbox
+    local head = character:FindFirstChild("Head")
+    local hitbox = nil
+    if head then
+        hitbox = Instance.new("Part")
+        hitbox.Size = Vector3.new(esp_settings.hitbox_size, esp_settings.hitbox_size, esp_settings.hitbox_size)
+        hitbox.Transparency = esp_settings.hitbox_enabled and esp_settings.hitbox_transparency or 1
+        hitbox.CanCollide = false
+        hitbox.Anchored = false
+        hitbox.Material = Enum.Material.ForceField
+        hitbox.Color = Color3.new(1, 0, 0)
+        hitbox.Name = "HeadHitbox"
+        hitbox.Parent = character
+
+        local weld = Instance.new("Weld")
+        weld.Part0 = head
+        weld.Part1 = hitbox
+        weld.C0 = CFrame.new(0, 0, 0)
+        weld.Parent = hitbox
+    end
+
+    local function update()
+        if not esp_settings.enabled or not character.Parent then
+            for _, obj in pairs(drawings) do obj.Visible = false end
+            return
+        end
+        local humanoid = character:FindFirstChildWhichIsA("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then
+            for _, obj in pairs(drawings) do obj.Visible = false end
+            return
+        end
+
+        -- Hide ESP if player is off-screen
+        local head = character:FindFirstChild("Head")
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if not head or not rootPart then
+            for _, obj in pairs(drawings) do obj.Visible = false end
+            return
+        end
+
+        local _, onScreen = getPartPosition(head)
+        if not onScreen then
+            for _, obj in pairs(drawings) do obj.Visible = false end
+            return
+        end
+
+        -- Name ESP
+        if esp_settings.nameesp then
+            local hp, hpscreen = getPartPosition(head)
+            if hpscreen then
+                local distance = math.floor((camera.CFrame.Position - head.Position).Magnitude)
+                text.Text = string.format("%s [%dm]", player.Name, distance)
+                text.Position = Vector2.new(hp.X, hp.Y - 20)
+                text.Color = esp_settings.skel_col
+                text.Visible = true
+            else
+                text.Visible = false
+            end
+        else
+            text.Visible = false
+        end
+
+        -- Skeleton ESP with full limbs
+        if esp_settings.skel then
+            local function gp(n) return character:FindFirstChild(n) end
+            local parts = {
+                head = gp("Head"),
+                upperTorso = gp("UpperTorso"),
+                lowerTorso = gp("LowerTorso"),
+                leftUpperArm = gp("LeftUpperArm"), leftLowerArm = gp("LeftLowerArm"), leftHand = gp("LeftHand"),
+                rightUpperArm = gp("RightUpperArm"), rightLowerArm = gp("RightLowerArm"), rightHand = gp("RightHand"),
+                leftUpperLeg = gp("LeftUpperLeg"), leftLowerLeg = gp("LeftLowerLeg"), leftFoot = gp("LeftFoot"),
+                rightUpperLeg = gp("RightUpperLeg"), rightLowerLeg = gp("RightLowerLeg"), rightFoot = gp("RightFoot")
+            }
+            local function line(a,b,name)
+                local posA, okA = getPartPosition(parts[a])
+                local posB, okB = getPartPosition(parts[b])
+                if okA and okB then
+                    drawings[name].From = posA
+                    drawings[name].To = posB
+                    drawings[name].Color = esp_settings.skel_col
+                    drawings[name].Thickness = esp_settings.thickness
+                    drawings[name].Visible = true
+                else
+                    drawings[name].Visible = false
+                end
+            end
+            -- Draw full arms and legs
+            line("upperTorso","head","head")
+            line("upperTorso","leftUpperArm","leftUpperArm")
+            line("leftUpperArm","leftLowerArm","leftLowerArm")
+            line("leftLowerArm","leftHand","leftHand")
+            line("upperTorso","rightUpperArm","rightUpperArm")
+            line("rightUpperArm","rightLowerArm","rightLowerArm")
+            line("rightLowerArm","rightHand","rightHand")
+            line("lowerTorso","leftUpperLeg","leftUpperLeg")
+            line("leftUpperLeg","leftLowerLeg","leftLowerLeg")
+            line("leftLowerLeg","leftFoot","leftFoot")
+            line("lowerTorso","rightUpperLeg","rightUpperLeg")
+            line("rightUpperLeg","rightLowerLeg","rightLowerLeg")
+            line("rightLowerLeg","rightFoot","rightFoot")
+            line("upperTorso","lowerTorso","upperTorso")
+        else
+            for n, obj in pairs(drawings) do 
+                if n ~= "nameText" then obj.Visible = false end
+            end
+        end
+    end
+
+    local conn = RunService.Heartbeat:Connect(update)
+    esp_cache[character] = {drawings = drawings, connection = conn, hitbox = hitbox}
+
+    -- Properly cleanup ESP if character leaves game
+    character.AncestryChanged:Connect(function(_, parent)
+        if not parent then removeESP(character) end
+    end)
+end
+
+local function attachESP(player)
+    player.CharacterAdded:Connect(function(char)
+        wait(1)
+        drawESP(player, char)
+    end)
+    if player.Character then drawESP(player, player.Character) end
+end
+
+for _, player in pairs(Players:GetPlayers()) do
+    if player ~= Players.LocalPlayer then
+        attachESP(player)
+    end
+end
+Players.PlayerAdded:Connect(function(player)
+    if player ~= Players.LocalPlayer then
+        attachESP(player)
+    end
+end)
+Players.PlayerRemoving:Connect(function(player)
+    if player.Character then removeESP(player.Character) end
+end)
+
+-- === SOFT AIM INSTANT-HIT EVENT ===
+input.InputBegan:Connect(function(io, gpe)
+    if not gpe and io.UserInputType == Enum.UserInputType.MouseButton1 and esp_settings.enabled and aimbot_settings.enabled then
+        local data = getClosestEnemyInFOV()
+        if data and data.head then
+            -- Replace with remote/function for Trident Survival, if needed:
+            local origin = camera.CFrame.Position
+            local direction = (data.head.Position - origin).Unit * 999
+            local raycastParams = RaycastParams.new()
+            raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+            raycastParams.FilterDescendantsInstances = {Players.LocalPlayer.Character}
+            local result = workspace:Raycast(origin, direction, raycastParams)
+            if result and result.Instance and result.Instance:IsDescendantOf(data.player.Character) then
+                print("Soft aim: would hit", data.player.Name)
+            end
+        end
+    end
+end)
