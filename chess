@@ -1,0 +1,246 @@
+-- StarterPlayerScripts/ClientChess.lua (CLIENT-SIDED CHESS-LIKE DEMO)
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
+
+local boardFolder = Workspace:WaitForChild("Board")
+
+-- ===== helpers: squares =====
+local files = {a=1,b=2,c=3,d=4,e=5,f=6,g=7,h=8}
+local letters = {"a","b","c","d","e","f","g","h"}
+
+local function sqToXY(sq)
+	local f = files[sq:sub(1,1)]
+	local r = tonumber(sq:sub(2,2))
+	return f, r
+end
+
+local function xyToSq(f, r)
+	return letters[f] .. tostring(r)
+end
+
+local function inBounds(f, r)
+	return f >= 1 and f <= 8 and r >= 1 and r <= 8
+end
+
+-- ===== position (very simple) =====
+-- Pieces: "P,R,N,B,Q,K" for White, lowercase for Black, "." empty
+local function startPosition()
+	local pos = {}
+	for r=1,8 do
+		for f=1,8 do
+			pos[xyToSq(f,r)] = "."
+		end
+	end
+
+	-- White on ranks 1-2, Black on 7-8
+	local back = {"R","N","B","Q","K","B","N","R"}
+	for f=1,8 do
+		pos[xyToSq(f,1)] = back[f]
+		pos[xyToSq(f,2)] = "P"
+		pos[xyToSq(f,7)] = "p"
+		pos[xyToSq(f,8)] = back[f]:lower()
+	end
+	return pos
+end
+
+local pos = startPosition()
+local turn = "w" -- "w" or "b"
+
+local function isWhite(p) return p:match("%u") ~= nil end
+local function isBlack(p) return p:match("%l") ~= nil end
+local function sameSide(side, p)
+	if p == "." then return false end
+	return (side == "w" and isWhite(p)) or (side == "b" and isBlack(p))
+end
+local function enemySide(side, p)
+	if p == "." then return false end
+	return (side == "w" and isBlack(p)) or (side == "b" and isWhite(p))
+end
+
+-- ===== rendering (simple text + optional 3D labels) =====
+local function printBoard()
+	for r=8,1,-1 do
+		local line = {}
+		for f=1,8 do
+			table.insert(line, pos[xyToSq(f,r)])
+		end
+		print(r, table.concat(line, " "))
+	end
+	print("  a b c d e f g h")
+	print("Turn:", turn == "w" and "White" or "Black")
+end
+
+-- Optional: create/update floating BillboardGui labels on squares
+local labelsEnabled = true
+local labelGuis = {}
+
+local function ensureLabel(part)
+	if labelGuis[part] then return end
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(50, 50)
+	bb.AlwaysOnTop = true
+	bb.StudsOffset = Vector3.new(0, 1.2, 0)
+	bb.Parent = part
+
+	local tl = Instance.new("TextLabel")
+	tl.BackgroundTransparency = 1
+	tl.Size = UDim2.fromScale(1, 1)
+	tl.TextScaled = true
+	tl.Font = Enum.Font.GothamBold
+	tl.TextColor3 = Color3.fromRGB(255, 255, 255)
+	tl.TextStrokeTransparency = 0.5
+	tl.Parent = bb
+
+	labelGuis[part] = tl
+end
+
+local function refreshLabels()
+	if not labelsEnabled then return end
+	for _, part in ipairs(boardFolder:GetChildren()) do
+		if part:IsA("BasePart") then
+			ensureLabel(part)
+			local sq = part.Name
+			labelGuis[part].Text = pos[sq] ~= "." and pos[sq] or ""
+		end
+	end
+end
+
+-- ===== move legality (simplified, no check rules) =====
+local function clearPath(fromSq, toSq, df, dr)
+	local ff, fr = sqToXY(fromSq)
+	local tf, tr = sqToXY(toSq)
+	local f, r = ff + df, fr + dr
+	while f ~= tf or r ~= tr do
+		if pos[xyToSq(f,r)] ~= "." then
+			return false
+		end
+		f, r = f + df, r + dr
+	end
+	return true
+end
+
+local function isLegalMove(fromSq, toSq)
+	if fromSq == toSq then return false end
+	local piece = pos[fromSq]
+	if piece == "." then return false end
+	if not sameSide(turn, piece) then return false end
+
+	local target = pos[toSq]
+	if sameSide(turn, target) then return false end
+
+	local ff, fr = sqToXY(fromSq)
+	local tf, tr = sqToXY(toSq)
+	local df, dr = tf - ff, tr - fr
+
+	local P = piece:upper()
+
+	if P == "P" then
+		local dir = (turn == "w") and 1 or -1
+		-- forward
+		if df == 0 and dr == dir and target == "." then
+			return true
+		end
+		-- double from start
+		local startRank = (turn == "w") and 2 or 7
+		if df == 0 and fr == startRank and dr == 2*dir and target == "." then
+			local midSq = xyToSq(ff, fr + dir)
+			return pos[midSq] == "."
+		end
+		-- capture
+		if math.abs(df) == 1 and dr == dir and enemySide(turn, target) then
+			return true
+		end
+		return false
+	end
+
+	if P == "N" then
+		local a, b = math.abs(df), math.abs(dr)
+		return (a == 1 and b == 2) or (a == 2 and b == 1)
+	end
+
+	if P == "K" then
+		return math.abs(df) <= 1 and math.abs(dr) <= 1
+	end
+
+	-- sliding pieces
+	local function sign(x) return x == 0 and 0 or (x > 0 and 1 or -1) end
+
+	if P == "B" then
+		if math.abs(df) ~= math.abs(dr) then return false end
+		return clearPath(fromSq, toSq, sign(df), sign(dr))
+	end
+
+	if P == "R" then
+		if df ~= 0 and dr ~= 0 then return false end
+		return clearPath(fromSq, toSq, sign(df), sign(dr))
+	end
+
+	if P == "Q" then
+		if df == 0 or dr == 0 or math.abs(df) == math.abs(dr) then
+			return clearPath(fromSq, toSq, sign(df), sign(dr))
+		end
+		return false
+	end
+
+	return false
+end
+
+local function makeMove(fromSq, toSq)
+	pos[toSq] = pos[fromSq]
+	pos[fromSq] = "."
+	turn = (turn == "w") and "b" or "w"
+	refreshLabels()
+	printBoard()
+end
+
+-- ===== click handling (client raycast) =====
+local selectedSq = nil
+
+local function raycastSquare()
+	-- Use mouse location to raycast into 3D (client-side pattern using camera ScreenPointToRay). [web:46]
+	local mousePos = UIS:GetMouseLocation()
+	local ray = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Include
+	params.FilterDescendantsInstances = {boardFolder}
+	local result = Workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+	if result and result.Instance and result.Instance:IsA("BasePart") then
+		return result.Instance
+	end
+	return nil
+end
+
+UIS.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+
+	local part = raycastSquare()
+	if not part then return end
+
+	local sq = part.Name
+	if not pos[sq] then return end
+
+	if not selectedSq then
+		if pos[sq] ~= "." and sameSide(turn, pos[sq]) then
+			selectedSq = sq
+			print("Selected:", selectedSq, pos[selectedSq])
+		end
+	else
+		local fromSq = selectedSq
+		local toSq = sq
+		selectedSq = nil
+
+		if isLegalMove(fromSq, toSq) then
+			makeMove(fromSq, toSq)
+		else
+			print("Illegal move:", fromSq, "->", toSq)
+		end
+	end
+end)
+
+refreshLabels()
+printBoard()
