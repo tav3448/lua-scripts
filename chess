@@ -1,4 +1,4 @@
--- StarterPlayerScripts/ClientChess.lua (CLIENT-SIDED CHESS-LIKE DEMO)
+-- StarterPlayerScripts/ClientChessFull.lua
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
@@ -6,28 +6,38 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local camera = Workspace.CurrentCamera
 
-local boardFolder = Workspace:WaitForChild("Board")
+-- =========================
+-- Config (tweakable)
+-- =========================
+local ORIGIN = Vector3.new(0, 5, 0)          -- where the 3D board spawns
+local SQUARE_SIZE = 3                        -- studs
+local SQUARE_THICKNESS = 0.4
+local BOARD_Y = ORIGIN.Y
+local PIECE_HEIGHT = 2.2
+local PIECE_RADIUS = 1.0
 
--- ===== helpers: squares =====
+local GUI_PPS = 50                           -- SurfaceGui PixelsPerStud (crisper = bigger) [SurfaceGui commonly uses this] [web:83]
+local GUI_FACE = Enum.NormalId.Top           -- show 2D board on top face of a screen part
+
+-- =========================
+-- Helpers: squares
+-- =========================
 local files = {a=1,b=2,c=3,d=4,e=5,f=6,g=7,h=8}
 local letters = {"a","b","c","d","e","f","g","h"}
 
+local function xyToSq(f, r) return letters[f] .. tostring(r) end
 local function sqToXY(sq)
 	local f = files[sq:sub(1,1)]
 	local r = tonumber(sq:sub(2,2))
 	return f, r
 end
 
-local function xyToSq(f, r)
-	return letters[f] .. tostring(r)
-end
+local function inBounds(f, r) return f>=1 and f<=8 and r>=1 and r<=8 end
 
-local function inBounds(f, r)
-	return f >= 1 and f <= 8 and r >= 1 and r <= 8
-end
-
--- ===== position (very simple) =====
--- Pieces: "P,R,N,B,Q,K" for White, lowercase for Black, "." empty
+-- =========================
+-- Chess state (simplified)
+-- =========================
+-- Pieces: "P,R,N,B,Q,K" white, lowercase black, "." empty
 local function startPosition()
 	local pos = {}
 	for r=1,8 do
@@ -35,8 +45,6 @@ local function startPosition()
 			pos[xyToSq(f,r)] = "."
 		end
 	end
-
-	-- White on ranks 1-2, Black on 7-8
 	local back = {"R","N","B","Q","K","B","N","R"}
 	for f=1,8 do
 		pos[xyToSq(f,1)] = back[f]
@@ -48,7 +56,7 @@ local function startPosition()
 end
 
 local pos = startPosition()
-local turn = "w" -- "w" or "b"
+local turn = "w"
 
 local function isWhite(p) return p:match("%u") ~= nil end
 local function isBlack(p) return p:match("%l") ~= nil end
@@ -61,63 +69,13 @@ local function enemySide(side, p)
 	return (side == "w" and isBlack(p)) or (side == "b" and isWhite(p))
 end
 
--- ===== rendering (simple text + optional 3D labels) =====
-local function printBoard()
-	for r=8,1,-1 do
-		local line = {}
-		for f=1,8 do
-			table.insert(line, pos[xyToSq(f,r)])
-		end
-		print(r, table.concat(line, " "))
-	end
-	print("  a b c d e f g h")
-	print("Turn:", turn == "w" and "White" or "Black")
-end
-
--- Optional: create/update floating BillboardGui labels on squares
-local labelsEnabled = true
-local labelGuis = {}
-
-local function ensureLabel(part)
-	if labelGuis[part] then return end
-	local bb = Instance.new("BillboardGui")
-	bb.Size = UDim2.fromOffset(50, 50)
-	bb.AlwaysOnTop = true
-	bb.StudsOffset = Vector3.new(0, 1.2, 0)
-	bb.Parent = part
-
-	local tl = Instance.new("TextLabel")
-	tl.BackgroundTransparency = 1
-	tl.Size = UDim2.fromScale(1, 1)
-	tl.TextScaled = true
-	tl.Font = Enum.Font.GothamBold
-	tl.TextColor3 = Color3.fromRGB(255, 255, 255)
-	tl.TextStrokeTransparency = 0.5
-	tl.Parent = bb
-
-	labelGuis[part] = tl
-end
-
-local function refreshLabels()
-	if not labelsEnabled then return end
-	for _, part in ipairs(boardFolder:GetChildren()) do
-		if part:IsA("BasePart") then
-			ensureLabel(part)
-			local sq = part.Name
-			labelGuis[part].Text = pos[sq] ~= "." and pos[sq] or ""
-		end
-	end
-end
-
--- ===== move legality (simplified, no check rules) =====
 local function clearPath(fromSq, toSq, df, dr)
 	local ff, fr = sqToXY(fromSq)
 	local tf, tr = sqToXY(toSq)
 	local f, r = ff + df, fr + dr
 	while f ~= tf or r ~= tr do
-		if pos[xyToSq(f,r)] ~= "." then
-			return false
-		end
+		local sq = xyToSq(f,r)
+		if pos[sq] ~= "." then return false end
 		f, r = f + df, r + dr
 	end
 	return true
@@ -135,25 +93,17 @@ local function isLegalMove(fromSq, toSq)
 	local ff, fr = sqToXY(fromSq)
 	local tf, tr = sqToXY(toSq)
 	local df, dr = tf - ff, tr - fr
-
 	local P = piece:upper()
 
 	if P == "P" then
 		local dir = (turn == "w") and 1 or -1
-		-- forward
-		if df == 0 and dr == dir and target == "." then
-			return true
-		end
-		-- double from start
+		if df == 0 and dr == dir and target == "." then return true end
 		local startRank = (turn == "w") and 2 or 7
 		if df == 0 and fr == startRank and dr == 2*dir and target == "." then
 			local midSq = xyToSq(ff, fr + dir)
 			return pos[midSq] == "."
 		end
-		-- capture
-		if math.abs(df) == 1 and dr == dir and enemySide(turn, target) then
-			return true
-		end
+		if math.abs(df) == 1 and dr == dir and enemySide(turn, target) then return true end
 		return false
 	end
 
@@ -166,19 +116,16 @@ local function isLegalMove(fromSq, toSq)
 		return math.abs(df) <= 1 and math.abs(dr) <= 1
 	end
 
-	-- sliding pieces
-	local function sign(x) return x == 0 and 0 or (x > 0 and 1 or -1) end
+	local function sign(x) return x==0 and 0 or (x>0 and 1 or -1) end
 
 	if P == "B" then
 		if math.abs(df) ~= math.abs(dr) then return false end
 		return clearPath(fromSq, toSq, sign(df), sign(dr))
 	end
-
 	if P == "R" then
 		if df ~= 0 and dr ~= 0 then return false end
 		return clearPath(fromSq, toSq, sign(df), sign(dr))
 	end
-
 	if P == "Q" then
 		if df == 0 or dr == 0 or math.abs(df) == math.abs(dr) then
 			return clearPath(fromSq, toSq, sign(df), sign(dr))
@@ -189,58 +136,219 @@ local function isLegalMove(fromSq, toSq)
 	return false
 end
 
-local function makeMove(fromSq, toSq)
-	pos[toSq] = pos[fromSq]
-	pos[fromSq] = "."
-	turn = (turn == "w") and "b" or "w"
-	refreshLabels()
-	printBoard()
+-- =========================
+-- 3D board + 2D SurfaceGui
+-- =========================
+local root = Workspace:FindFirstChild("ClientChess")
+if root then root:Destroy() end
+root = Instance.new("Folder")
+root.Name = "ClientChess"
+root.Parent = Workspace
+
+local boardModel = Instance.new("Folder")
+boardModel.Name = "Board"
+boardModel.Parent = root
+
+local piecesFolder = Instance.new("Folder")
+piecesFolder.Name = "Pieces"
+piecesFolder.Parent = root
+
+-- A single big part that holds the 2D UI on its top surface.
+local screenPart = Instance.new("Part")
+screenPart.Name = "BoardScreen"
+screenPart.Anchored = true
+screenPart.CanCollide = false
+screenPart.Size = Vector3.new(8*SQUARE_SIZE, 0.3, 8*SQUARE_SIZE)
+screenPart.CFrame = CFrame.new(ORIGIN + Vector3.new(0, 0.15, 0))
+screenPart.Material = Enum.Material.SmoothPlastic
+screenPart.Color = Color3.fromRGB(20, 20, 20)
+screenPart.Parent = root
+
+local surfaceGui = Instance.new("SurfaceGui")
+surfaceGui.Name = "Chess2D"
+surfaceGui.Face = GUI_FACE
+surfaceGui.Adornee = screenPart
+surfaceGui.PixelsPerStud = GUI_PPS
+surfaceGui.AlwaysOnTop = true
+surfaceGui.LightInfluence = 0
+surfaceGui.Parent = screenPart
+-- SurfaceGui is the supported way to render UI on a part surface. [web:85][web:93]
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromScale(1, 1)
+frame.BackgroundTransparency = 1
+frame.Parent = surfaceGui
+
+local uiSquares = {}   -- sq -> Frame
+local worldSquares = {}-- sq -> Part
+
+-- Create 64 square parts + matching 2D frames
+for r=1,8 do
+	for f=1,8 do
+		local sq = xyToSq(f,r)
+		local isLight = ((f + r) % 2 == 0)
+
+		-- 3D square part (thin tile)
+		local p = Instance.new("Part")
+		p.Name = sq
+		p.Anchored = true
+		p.Size = Vector3.new(SQUARE_SIZE, SQUARE_THICKNESS, SQUARE_SIZE)
+		p.Material = Enum.Material.SmoothPlastic
+		p.Color = isLight and Color3.fromRGB(235, 235, 235) or Color3.fromRGB(60, 60, 60)
+		p.CanCollide = false
+
+		-- Layout: a1 at bottom-left when looking from above
+		local x = (f - 4.5) * SQUARE_SIZE
+		local z = (r - 4.5) * SQUARE_SIZE
+		p.Position = Vector3.new(ORIGIN.X + x, BOARD_Y + (SQUARE_THICKNESS/2) + 0.3, ORIGIN.Z + z)
+		p.Parent = boardModel
+		worldSquares[sq] = p
+
+		-- 2D square frame (fills 1/8 of surface)
+		local cell = Instance.new("Frame")
+		cell.Name = sq
+		cell.BorderSizePixel = 0
+		cell.BackgroundColor3 = p.Color
+		cell.Size = UDim2.fromScale(1/8, 1/8)
+		-- GUI coordinates: top-left is (0,0); rank 8 at top.
+		cell.Position = UDim2.fromScale((f-1)/8, (8-r)/8)
+		cell.Parent = frame
+		uiSquares[sq] = cell
+
+		-- Piece label (text) inside 2D square
+		local lbl = Instance.new("TextLabel")
+		lbl.Name = "Piece"
+		lbl.BackgroundTransparency = 1
+		lbl.Size = UDim2.fromScale(1, 1)
+		lbl.TextScaled = true
+		lbl.Font = Enum.Font.GothamBold
+		lbl.TextStrokeTransparency = 0.6
+		lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+		lbl.Parent = cell
+
+		-- Selection highlight
+		local stroke = Instance.new("UIStroke")
+		stroke.Name = "Sel"
+		stroke.Thickness = 0
+		stroke.Color = Color3.fromRGB(255, 200, 0)
+		stroke.Parent = cell
+	end
 end
 
--- ===== click handling (client raycast) =====
+-- =========================
+-- Pieces (3D) + UI refresh
+-- =========================
+local pieceParts = {} -- sq -> Part
+
+local function pieceText(p)
+	-- simple glyphs
+	local map = {P="P",R="R",N="N",B="B",Q="Q",K="K"}
+	if p == "." then return "" end
+	local t = map[p:upper()] or "?"
+	return isWhite(p) and t or t:lower()
+end
+
+local function makePiecePart(square, p)
+	local base = worldSquares[square]
+	local part = Instance.new("Part")
+	part.Name = "Piece_" .. square
+	part.Anchored = true
+	part.CanCollide = false
+	part.Shape = Enum.PartType.Cylinder
+	part.Size = Vector3.new(PIECE_RADIUS*2, PIECE_HEIGHT, PIECE_RADIUS*2)
+	part.Material = Enum.Material.SmoothPlastic
+	part.Color = isWhite(p) and Color3.fromRGB(230,230,230) or Color3.fromRGB(30,30,30)
+
+	-- Cylinder stands upright by rotating 90° around Z
+	part.CFrame = CFrame.new(base.Position + Vector3.new(0, PIECE_HEIGHT/2 + 0.25, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	part.Parent = piecesFolder
+	return part
+end
+
+local function refresh()
+	-- update 2D text + 3D pieces to match pos
+	for sq, cell in pairs(uiSquares) do
+		cell.Piece.Text = pieceText(pos[sq])
+	end
+
+	-- remove missing pieces
+	for sq, pp in pairs(pieceParts) do
+		if pos[sq] == "." then
+			pp:Destroy()
+			pieceParts[sq] = nil
+		end
+	end
+
+	-- create/move existing
+	for sq, p in pairs(pos) do
+		if p ~= "." then
+			if not pieceParts[sq] then
+				pieceParts[sq] = makePiecePart(sq, p)
+			else
+				local base = worldSquares[sq]
+				local pp = pieceParts[sq]
+				pp.Color = isWhite(p) and Color3.fromRGB(230,230,230) or Color3.fromRGB(30,30,30)
+				pp.CFrame = CFrame.new(base.Position + Vector3.new(0, PIECE_HEIGHT/2 + 0.25, 0)) * CFrame.Angles(0, 0, math.rad(90))
+			end
+		end
+	end
+end
+
+-- =========================
+-- Input (client raycast)
+-- =========================
 local selectedSq = nil
 
-local function raycastSquare()
-	-- Use mouse location to raycast into 3D (client-side pattern using camera ScreenPointToRay). [web:46]
+local function setSelected(sq)
+	-- clear all strokes
+	for _, cell in pairs(uiSquares) do
+		cell.Sel.Thickness = 0
+	end
+	selectedSq = sq
+	if sq and uiSquares[sq] then
+		uiSquares[sq].Sel.Thickness = 3
+	end
+end
+
+local function raycastBoardSquare()
 	local mousePos = UIS:GetMouseLocation()
-	local ray = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+	local ray = camera:ViewportPointToRay(mousePos.X, mousePos.Y) -- client ray from screen point [web:46]
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
-	params.FilterDescendantsInstances = {boardFolder}
-	local result = Workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+	params.FilterDescendantsInstances = {boardModel}
+	local result = Workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
 	if result and result.Instance and result.Instance:IsA("BasePart") then
-		return result.Instance
+		return result.Instance.Name -- square name a1..h8
 	end
 	return nil
 end
 
-UIS.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
+local function doMove(fromSq, toSq)
+	pos[toSq] = pos[fromSq]
+	pos[fromSq] = "."
+	turn = (turn == "w") and "b" or "w"
+	refresh()
+end
+
+UIS.InputBegan:Connect(function(input, processed)
+	if processed then return end
 	if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
 
-	local part = raycastSquare()
-	if not part then return end
-
-	local sq = part.Name
-	if not pos[sq] then return end
+	local sq = raycastBoardSquare()
+	if not sq or not pos[sq] then return end
 
 	if not selectedSq then
 		if pos[sq] ~= "." and sameSide(turn, pos[sq]) then
-			selectedSq = sq
-			print("Selected:", selectedSq, pos[selectedSq])
+			setSelected(sq)
 		end
 	else
 		local fromSq = selectedSq
-		local toSq = sq
-		selectedSq = nil
+		setSelected(nil)
 
-		if isLegalMove(fromSq, toSq) then
-			makeMove(fromSq, toSq)
-		else
-			print("Illegal move:", fromSq, "->", toSq)
+		if isLegalMove(fromSq, sq) then
+			doMove(fromSq, sq)
 		end
 	end
 end)
 
-refreshLabels()
-printBoard()
+refresh()
